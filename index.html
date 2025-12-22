@@ -3,24 +3,24 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>FreeAgent Login Test</title>
+  <title>FreeAgent Debug</title>
   <style>
     body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;margin:24px;max-width:720px}
     .card{border:1px solid #ddd;border-radius:14px;padding:14px}
     label{display:block;font-size:12px;color:#444;margin-top:10px}
     input,button{width:100%;padding:10px;border-radius:10px;border:1px solid #ccc;margin-top:6px;box-sizing:border-box}
     button{cursor:pointer;font-weight:650}
-    pre{background:#0b1020;color:#e9eefc;padding:12px;border-radius:12px;overflow:auto}
-    .muted{color:#666;font-size:12px}
-    .ok{color:#0a7a2f;font-weight:650}
-    .err{color:#b00020;font-weight:650}
-    .row{display:flex;gap:10px}
+    .row{display:flex;gap:10px;margin-top:10px}
     .row>*{flex:1}
+    .muted{color:#666;font-size:12px}
+    .ok{color:#0a7a2f;font-weight:700}
+    .err{color:#b00020;font-weight:700}
+    pre{background:#0b1020;color:#e9eefc;padding:12px;border-radius:12px;overflow:auto}
   </style>
 </head>
 <body>
-  <h1>FreeAgent Login Test</h1>
-  <div class="muted">If you don’t see “Script loaded ✅”, your JS didn’t run.</div>
+  <h1>FreeAgent Debug</h1>
+  <div class="muted">If buttons don’t change the status text, click handlers aren’t attaching.</div>
 
   <div class="card" style="margin-top:14px;">
     <div id="status" class="muted">Loading…</div>
@@ -31,79 +31,96 @@
     <label>Password</label>
     <input id="password" type="password" placeholder="••••••••" />
 
-    <div class="row" style="margin-top:10px;">
+    <div class="row">
       <button id="btnSignIn">Sign in</button>
       <button id="btnSignUp">Sign up</button>
     </div>
+
     <button id="btnSignOut" style="margin-top:10px;">Sign out</button>
 
-    <h3 style="margin-top:14px;">Session</h3>
-    <pre id="dump">{ "session": null }</pre>
+    <h3 style="margin-top:14px;">Dump</h3>
+    <pre id="dump">{}</pre>
   </div>
 
-  <!-- Supabase v2 UMD build (no modules, works clean on GitHub Pages) -->
+  <!-- Supabase CDN -->
   <script src="https://unpkg.com/@supabase/supabase-js@2"></script>
 
   <script>
+    // SHOW ERRORS ON THE PAGE (so nothing is silent)
+    const set = (msg, cls="muted") => {
+      const el = document.getElementById("status");
+      el.className = cls;
+      el.textContent = msg;
+      console.log("[STATUS]", msg);
+    };
+    const dump = (obj) => document.getElementById("dump").textContent = JSON.stringify(obj, null, 2);
+
+    window.addEventListener("error", (e) => set("JS error: " + (e.message || e.type), "err"));
+    window.addEventListener("unhandledrejection", (e) => set("Promise error: " + (e.reason?.message || e.reason), "err"));
+
+    set("JS ran ✅", "ok");
+
+    // 1) Prove Supabase library loaded
+    if (!window.supabase) {
+      set("Supabase library DID NOT load (blocked by extension/CDN).", "err");
+      dump({ window_supabase: null });
+      throw new Error("window.supabase missing");
+    }
+
+    set("Supabase library loaded ✅", "ok");
+
     // >>> PASTE THESE:
     const SUPABASE_URL = "https://polfteqwekkhzlhfjhsn.supabase.co";
     const SUPABASE_ANON_KEY = `eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InBvbGZ0ZXF3ZWtraHpsaGZqaHNuIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjUxMTU2MzAsImV4cCI6MjA4MDY5MTYzMH0.npJCJJKOLTQddFH-xtU_ZtlT9_M8JWWpScDIsZAGY4M`.replace(/\s+/g, "");
-
-    const $ = (id) => document.getElementById(id);
-    const set = (msg, cls="muted") => { $("status").className = cls; $("status").textContent = msg; };
-    const dump = (obj) => { $("dump").textContent = JSON.stringify(obj, null, 2); };
-
-    // Show fatal JS errors on-page (so “nothing happens” is impossible)
-    window.addEventListener("error", (e) => set("JS error: " + (e.message || e.type), "err"));
-    window.addEventListener("unhandledrejection", (e) => set("Promise error: " + (e.reason?.message || e.reason), "err"));
 
     if (SUPABASE_URL.includes("PASTE_") || SUPABASE_ANON_KEY.includes("PASTE_")) {
       set("You did not paste your Supabase URL / anon key.", "err");
       throw new Error("Missing Supabase config");
     }
 
-    // IMPORTANT: use your schema
-    const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
-      db: { schema: "freeagents" }
+    const client = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY, { db: { schema: "freeagents" } });
+
+    // 2) Attach click handlers and prove it
+    document.getElementById("btnSignIn").addEventListener("click", async () => {
+      set("CLICK: Sign in ✅ (handler fired)", "ok");
+      try {
+        const email = document.getElementById("email").value.trim();
+        const password = document.getElementById("password").value;
+        const { data, error } = await client.auth.signInWithPassword({ email, password });
+        if (error) { set("Sign in error: " + error.message, "err"); return; }
+        set("Signed in ✅", "ok");
+        dump({ data });
+      } catch (e) {
+        set("Exception: " + e.message, "err");
+      }
     });
 
-    async function refresh() {
-      const { data, error } = await supabase.auth.getSession();
-      if (error) { set(error.message, "err"); dump({ session: null }); return; }
-      dump({ session: data.session });
-      if (data.session?.user?.id) set("Signed in ✅ " + data.session.user.email, "ok");
-      else set("Not signed in.", "muted");
-    }
-
-    $("btnSignIn").addEventListener("click", async () => {
-      set("Signing in…", "muted");
-      const email = $("email").value.trim();
-      const password = $("password").value;
-      const { error } = await supabase.auth.signInWithPassword({ email, password });
-      if (error) return set(error.message, "err");
-      await refresh();
+    document.getElementById("btnSignUp").addEventListener("click", async () => {
+      set("CLICK: Sign up ✅ (handler fired)", "ok");
+      try {
+        const email = document.getElementById("email").value.trim();
+        const password = document.getElementById("password").value;
+        const { data, error } = await client.auth.signUp({ email, password });
+        if (error) { set("Sign up error: " + error.message, "err"); return; }
+        set("Signed up ✅ (check email if confirmation enabled)", "ok");
+        dump({ data });
+      } catch (e) {
+        set("Exception: " + e.message, "err");
+      }
     });
 
-    $("btnSignUp").addEventListener("click", async () => {
-      set("Signing up…", "muted");
-      const email = $("email").value.trim();
-      const password = $("password").value;
-      const { error } = await supabase.auth.signUp({ email, password });
-      if (error) return set(error.message, "err");
-      set("Sign-up created. If email confirmation is enabled, check your inbox.", "ok");
-      await refresh();
+    document.getElementById("btnSignOut").addEventListener("click", async () => {
+      set("CLICK: Sign out ✅ (handler fired)", "ok");
+      try {
+        const { error } = await client.auth.signOut();
+        if (error) { set("Sign out error: " + error.message, "err"); return; }
+        set("Signed out ✅", "ok");
+      } catch (e) {
+        set("Exception: " + e.message, "err");
+      }
     });
 
-    $("btnSignOut").addEventListener("click", async () => {
-      set("Signing out…", "muted");
-      const { error } = await supabase.auth.signOut();
-      if (error) return set(error.message, "err");
-      await refresh();
-    });
-
-    set("Script loaded ✅", "ok");
-    refresh();
+    set("Handlers attached ✅ (buttons should respond now)", "ok");
   </script>
-  <script src="./ping.js"></script>
 </body>
 </html>
