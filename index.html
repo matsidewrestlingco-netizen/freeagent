@@ -361,6 +361,9 @@
 
       const slotsByOpening = new Map();
       (slots || []).forEach(s => {
+          if (s.is_filled === true) return;
+          if (typeof s.quantity === 'number' && s.quantity <= 0) return;
+
         if (!slotsByOpening.has(s.opening_id)) slotsByOpening.set(s.opening_id, []);
         slotsByOpening.get(s.opening_id).push(s);
       });
@@ -369,7 +372,13 @@
         const d = divisionMap.get(o.division_id);
         const divLabel = d ? d.name : o.division_id;
 
-        const slotLines = (slotsByOpening.get(o.id) || []).map(s => {
+        const visibleSlots = (slotsByOpening.get(o.id) || []).filter(s => {
+          if (s.is_filled === true) return false;
+          if (typeof s.quantity === 'number' && s.quantity <= 0) return false;
+          return true;
+        });
+
+        const slotLines = visibleSlots.map(s => {
           const parts = [];
           if (s.target_max_lbs != null) parts.push(`≤ ${s.target_max_lbs} lbs`);
           if (s.range_min_lbs != null && s.range_max_lbs != null) parts.push(`${s.range_min_lbs}–${s.range_max_lbs} lbs`);
@@ -377,7 +386,9 @@
           return `• ${parts.join(" / ")} (qty ${s.quantity})`;
         });
 
-        const item = document.createElement("div");
+                if (!visibleSlots.length) return;
+
+const item = document.createElement("div");
         item.className = "item";
         item.innerHTML = `
           <h4>${esc(o.teams.team_name)} <span class="pill">${esc(divLabel)}</span></h4>
@@ -530,10 +541,17 @@
               const id = e.target.getAttribute("data-id");
               const next = e.target.getAttribute("data-action");
 
-              const { error } = await supabase
-                .from("match_requests")
-                .update({ status: next, responded_at: new Date().toISOString(), responded_by: uid })
-                .eq("id", id);
+              let error;
+              if (next === "ACCEPTED") {
+                const res = await supabase.rpc("accept_match_request", { p_request_id: id });
+                error = res.error;
+              } else {
+                const res = await supabase
+                  .from("match_requests")
+                  .update({ status: next, responded_at: new Date().toISOString(), responded_by: uid })
+                  .eq("id", id);
+                error = res.error;
+              }
 
               if (error) throw error;
               await loadMyRequests();
