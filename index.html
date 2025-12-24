@@ -25,6 +25,7 @@
     .item h4 { margin: 0 0 6px 0; }
     code { background: #f6f6f6; padding: 2px 6px; border-radius: 8px; }
     .pill { display:inline-block; padding: 2px 8px; border-radius: 999px; background:#f2f2f2; font-size: 12px; margin-left: 6px; }
+    hr { margin:18px 0;border:none;border-top:1px solid #eee; }
   </style>
 </head>
 <body>
@@ -33,7 +34,7 @@
 
   <noscript>
     <div style="margin-top:10px;color:#b00020;font-weight:800;">
-      JavaScript is disabled or blocked. This site will not work until scripts are allowed.
+      JavaScript is disabled or blocked. This site won’t work until scripts are allowed.
     </div>
   </noscript>
 
@@ -104,7 +105,7 @@
     </div>
   </div>
 
-  <hr style="margin:18px 0;border:none;border-top:1px solid #eee;" />
+  <hr />
 
   <div class="grid">
     <div class="card">
@@ -166,482 +167,498 @@
   </div>
 
   <script>
-  document.getElementById("authStatus").textContent = "Inline JS ran ✅ (before Supabase)";
-  </script>
-
-  <!-- Supabase UMD (stable on GitHub Pages) -->
-  <script src="https://unpkg.com/@supabase/supabase-js@2"></script>
-
-  <script>
-    // ---------- Config (PASTE YOURS) ----------
-    const SUPABASE_URL = "https://polfteqwekkhzlhfjhsn.supabase.co";
-    const SUPABASE_ANON_KEY = `eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InBvbGZ0ZXF3ZWtraHpsaGZqaHNuIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjUxMTU2MzAsImV4cCI6MjA4MDY5MTYzMH0.npJCJJKOLTQddFH-xtU_ZtlT9_M8JWWpScDIsZAGY4M`.replace(/\s+/g, "");
-
-    // ---------- Helpers ----------
+  (() => {
+    // ---------- tiny UI helpers (no supabase yet) ----------
     const $ = (id) => document.getElementById(id);
     const set = (el, msg, cls="muted") => { el.className = cls; el.textContent = msg; };
-    const dump = (obj) => { $("sessionDump").textContent = JSON.stringify(obj, null, 2); };
-    const esc = (s) => String(s ?? "").replace(/[&<>"']/g, ch => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[ch]));
 
-    // Show fatal JS errors on-page (no more silent failures)
+    // If the loader fails, you'll see it here, not in the console.
     window.addEventListener("error", (e) => set($("authStatus"), "JS error: " + (e.message || e.type), "err"));
     window.addEventListener("unhandledrejection", (e) => set($("authStatus"), "Promise error: " + (e.reason?.message || e.reason), "err"));
 
-    // Basic sanity checks
-    if (!window.supabase) {
-      set($("authStatus"), "Supabase library failed to load (blocked by browser/extension).", "err");
-      throw new Error("window.supabase missing");
-    }
-    if (SUPABASE_URL.includes("PASTE_") || SUPABASE_ANON_KEY.includes("PASTE_")) {
-      set($("authStatus"), "Paste your Supabase URL + anon key in index.html.", "err");
-      throw new Error("Missing Supabase config");
-    }
+    // ---------- Supabase loader (timeout + fallback) ----------
+    const SUPABASE_CDNS = [
+      "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2",
+      "https://unpkg.com/@supabase/supabase-js@2",
+    ];
 
-    // ---------- Client ----------
-    const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
-      db: { schema: "freeagents" }
-    });
+    function loadScript(url, timeoutMs = 8000) {
+      return new Promise((resolve, reject) => {
+        const s = document.createElement("script");
+        s.src = url;
+        s.async = true;
 
-    // ---------- State ----------
-    const divisionMap = new Map(); // division_id -> row
+        const t = setTimeout(() => {
+          s.remove();
+          reject(new Error("Timeout loading " + url));
+        }, timeoutMs);
 
-    async function getSession() {
-      const { data, error } = await supabase.auth.getSession();
-      if (error) throw error;
-      dump({ session: data.session });
-      return data.session;
-    }
+        s.onload = () => { clearTimeout(t); resolve(url); };
+        s.onerror = () => { clearTimeout(t); s.remove(); reject(new Error("Failed to load " + url)); };
 
-    async function requireUserId() {
-      const session = await getSession();
-      const uid = session?.user?.id;
-      if (!uid) throw new Error("You must be signed in.");
-      return uid;
-    }
-
-    async function refreshAuthUI() {
-      const session = await getSession();
-      if (session?.user?.id) {
-        set($("authStatus"), `Signed in ✅ ${session.user.email}`, "ok");
-      } else {
-        set($("authStatus"), "Not signed in.", "muted");
-      }
-      await loadMySlots(); // no-op if not signed in
-    }
-
-    // ---------- Tournaments / Divisions ----------
-    async function loadTournaments() {
-      set($("tournamentsStatus"), "Loading tournaments…", "muted");
-
-      const { data, error } = await supabase
-        .from("tournaments")
-        .select("*")
-        .order("start_date", { ascending: true });
-
-      if (error) { set($("tournamentsStatus"), error.message, "err"); return; }
-
-      $("tournamentSelect").innerHTML = "";
-      data.forEach(t => {
-        const opt = document.createElement("option");
-        opt.value = t.id;
-        opt.textContent = `${t.name} (${t.start_date})`;
-        $("tournamentSelect").appendChild(opt);
+        document.head.appendChild(s);
       });
-
-      set($("tournamentsStatus"), `Loaded ${data.length} tournament(s).`, "ok");
-
-      await loadDivisionsForSelectedTournament();
-      await refreshBoard();
-      await loadMySlots();
     }
 
-    async function loadDivisionsForSelectedTournament() {
-      divisionMap.clear();
+    async function ensureSupabaseLoaded() {
+      for (const url of SUPABASE_CDNS) {
+        try {
+          set($("authStatus"), "Loading Supabase library…", "muted");
+          await loadScript(url, 8000);
+          if (window.supabase?.createClient) return true;
+        } catch (e) {
+          console.warn(e);
+        }
+      }
+      return false;
+    }
 
-      $("divisionFilter").innerHTML = "";
-      $("divisionSelectA").innerHTML = "";
-      $("divisionSelectT").innerHTML = "";
+    // ---------- App ----------
+    function startApp() {
+      // >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
+      // PASTE YOUR SUPABASE CONFIG HERE:
+      const SUPABASE_URL = "https://polfteqwekkhzlhfjhsn.supabase.co";
+      const SUPABASE_ANON_KEY = `eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InBvbGZ0ZXF3ZWtraHpsaGZqaHNuIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjUxMTU2MzAsImV4cCI6MjA4MDY5MTYzMH0.npJCJJKOLTQddFH-xtU_ZtlT9_M8JWWpScDIsZAGY4M`.replace(/\s+/g, "");
+      // <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
 
-      const tid = $("tournamentSelect").value;
-      if (!tid) return;
-
-      const { data, error } = await supabase
-        .from("divisions")
-        .select("*")
-        .eq("tournament_id", tid)
-        .order("grade_min", { ascending: true });
-
-      if (error) {
-        set($("tournamentsStatus"), "Could not load divisions for this tournament. " + error.message, "err");
+      if (SUPABASE_URL.includes("PASTE_") || SUPABASE_ANON_KEY.includes("PASTE_")) {
+        set($("authStatus"), "Paste your Supabase URL + anon key in index.html.", "err");
         return;
       }
 
-      const allOpt = document.createElement("option");
-      allOpt.value = "";
-      allOpt.textContent = "All divisions";
-      $("divisionFilter").appendChild(allOpt);
-
-      data.forEach(d => {
-        divisionMap.set(d.id, d);
-        const label = `${d.name} (grades ${d.grade_min}-${d.grade_max}, ${d.gender_policy})`;
-
-        const f = document.createElement("option");
-        f.value = d.id; f.textContent = label;
-        $("divisionFilter").appendChild(f);
-
-        const a = document.createElement("option");
-        a.value = d.id; a.textContent = label;
-        const t = a.cloneNode(true);
-
-        $("divisionSelectA").appendChild(a);
-        $("divisionSelectT").appendChild(t);
+      const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+        db: { schema: "freeagents" }
       });
-    }
 
-    // ---------- Board ----------
-    async function refreshBoard() {
-      const tid = $("tournamentSelect").value;
-      if (!tid) return;
-      const did = $("divisionFilter").value || null;
-      await Promise.all([loadOpenings(tid, did), loadFreeAgents(tid, did)]);
-    }
+      const dump = (obj) => { $("sessionDump").textContent = JSON.stringify(obj, null, 2); };
+      const esc = (s) => String(s ?? "").replace(/[&<>"']/g, ch => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[ch]));
 
-    async function loadOpenings(tournamentId, divisionIdOrNull) {
-      set($("openingsStatus"), "Loading openings…", "muted");
-      $("openingsList").innerHTML = "";
+      const divisionMap = new Map();
 
-      let q = supabase
-        .from("team_openings")
-        .select("id, team_id, division_id, notes, status, created_at, teams!inner(team_name, tournament_id)")
-        .eq("teams.tournament_id", tournamentId)
-        .eq("status", "ACTIVE")
-        .order("created_at", { ascending: false });
-
-      if (divisionIdOrNull) q = q.eq("division_id", divisionIdOrNull);
-
-      const { data: openings, error: oErr } = await q;
-      if (oErr) { set($("openingsStatus"), oErr.message, "err"); return; }
-
-      if (!openings.length) {
-        set($("openingsStatus"), "No openings yet.", "muted");
-        return;
+      async function getSession() {
+        const { data, error } = await supabase.auth.getSession();
+        if (error) throw error;
+        dump({ session: data.session });
+        return data.session;
       }
 
-      const openingIds = openings.map(o => o.id);
-      const { data: slots, error: sErr } = await supabase
-        .from("opening_slots")
-        .select("*")
-        .in("opening_id", openingIds);
-
-      if (sErr) { set($("openingsStatus"), sErr.message, "err"); return; }
-
-      const slotsByOpening = new Map();
-      (slots || []).forEach(s => {
-        if (!slotsByOpening.has(s.opening_id)) slotsByOpening.set(s.opening_id, []);
-        slotsByOpening.get(s.opening_id).push(s);
-      });
-
-      openings.forEach(o => {
-        const d = divisionMap.get(o.division_id);
-        const divLabel = d ? d.name : o.division_id;
-
-        const slotLines = (slotsByOpening.get(o.id) || []).map(s => {
-          const parts = [];
-          if (s.target_max_lbs != null) parts.push(`≤ ${s.target_max_lbs} lbs`);
-          if (s.range_min_lbs != null && s.range_max_lbs != null) parts.push(`${s.range_min_lbs}–${s.range_max_lbs} lbs`);
-          if (!parts.length) parts.push("Weight TBD");
-          return `• ${parts.join(" / ")} (qty ${s.quantity})`;
-        });
-
-        const item = document.createElement("div");
-        item.className = "item";
-        item.innerHTML = `
-          <h4>${esc(o.teams.team_name)} <span class="pill">${esc(divLabel)}</span></h4>
-          <div class="muted">${o.notes ? esc(o.notes) : ""}</div>
-          <div style="margin-top:8px; font-size: 13px;">
-            <b>Slots:</b><br/>
-            ${slotLines.length ? slotLines.map(x => esc(x)).join("<br/>") : "—"}
-          </div>
-        `;
-        $("openingsList").appendChild(item);
-      });
-
-      set($("openingsStatus"), `Showing ${openings.length} opening(s).`, "ok");
-    }
-
-    async function loadFreeAgents(tournamentId, divisionIdOrNull) {
-      set($("agentsStatus"), "Loading free agents…", "muted");
-      $("agentsList").innerHTML = "";
-
-      let q = supabase
-        .from("public_free_agents")
-        .select("*")
-        .eq("tournament_id", tournamentId)
-        .order("created_at", { ascending: false });
-
-      if (divisionIdOrNull) q = q.eq("division_id", divisionIdOrNull);
-
-      const { data, error } = await q;
-      if (error) { set($("agentsStatus"), error.message, "err"); return; }
-
-      if (!data.length) {
-        set($("agentsStatus"), "No free agents posted yet.", "muted");
-        return;
+      async function requireUserId() {
+        const session = await getSession();
+        const uid = session?.user?.id;
+        if (!uid) throw new Error("You must be signed in.");
+        return uid;
       }
 
-      const session = await getSession();
-      const loggedIn = !!session?.user?.id;
-
-      const slotId = $("mySlotSelect").value || "";
-
-      data.forEach(a => {
-        const d = divisionMap.get(a.division_id);
-        const divLabel = d ? d.name : a.division_id;
-
-        const canMake = (a.can_make_lbs == null) ? "—" : `≤ ${a.can_make_lbs} lbs`;
-        const grade = (a.grade == null) ? "—" : a.grade;
-
-        const item = document.createElement("div");
-        item.className = "item";
-        item.innerHTML = `
-          <h4>${esc(a.first_name)} <span class="pill">${esc(divLabel)}</span></h4>
-          <div style="font-size: 13px;">
-            <b>Grade:</b> ${esc(String(grade))} &nbsp; • &nbsp; <b>Can make:</b> ${esc(String(canMake))}
-          </div>
-          <div class="row" style="margin-top:10px;">
-            <button data-availability="${esc(a.availability_id)}" ${(!loggedIn || !slotId) ? "disabled" : ""}>
-              Request this free agent (fills my selected slot)
-            </button>
-          </div>
-          <div class="muted" style="margin-top:6px;">
-            ${(!loggedIn) ? "Log in to request." : (!slotId ? "Select one of your slots above to enable requests." : "")}
-          </div>
-        `;
-
-        const btn = item.querySelector("button");
-        btn.addEventListener("click", async () => {
-          try {
-            const uid = await requireUserId();
-            const slot_id = $("mySlotSelect").value;
-            const availability_id = btn.getAttribute("data-availability");
-            if (!slot_id) throw new Error("Select your slot first.");
-
-            const { error: insErr } = await supabase
-              .from("match_requests")
-              .insert({ slot_id, availability_id, requested_by: uid });
-
-            if (insErr) throw insErr;
-
-            set($("agentsStatus"), "Request sent ✅", "ok");
-          } catch (e) {
-            set($("agentsStatus"), e.message, "err");
-          }
-        });
-
-        $("agentsList").appendChild(item);
-      });
-
-      set($("agentsStatus"), `Showing ${data.length} free agent(s).`, "ok");
-    }
-
-    // ---------- My Slots (for requesting) ----------
-    async function loadMySlots() {
-      $("mySlotSelect").innerHTML = "";
-      set($("mySlotStatus"), "", "muted");
-
-      const tid = $("tournamentSelect").value;
-      if (!tid) return;
-
-      const session = await getSession();
-      const uid = session?.user?.id;
-
-      if (!uid) {
-        const opt = document.createElement("option");
-        opt.value = "";
-        opt.textContent = "Sign in to select your slot";
-        $("mySlotSelect").appendChild(opt);
-        return;
+      async function refreshAuthUI() {
+        const session = await getSession();
+        if (session?.user?.id) set($("authStatus"), `Signed in ✅ ${session.user.email}`, "ok");
+        else set($("authStatus"), "Not signed in.", "muted");
+        await loadMySlots();
       }
 
-      const { data: myOpenings, error: oErr } = await supabase
-        .from("team_openings")
-        .select("id, division_id, created_at, teams!inner(team_name, tournament_id)")
-        .eq("created_by", uid)
-        .eq("teams.tournament_id", tid)
-        .order("created_at", { ascending: false });
+      async function loadTournaments() {
+        set($("tournamentsStatus"), "Loading tournaments…", "muted");
 
-      if (oErr) { set($("mySlotStatus"), oErr.message, "err"); return; }
-
-      if (!myOpenings.length) {
-        const opt = document.createElement("option");
-        opt.value = "";
-        opt.textContent = "No slots yet (create an opening below)";
-        $("mySlotSelect").appendChild(opt);
-        return;
-      }
-
-      const openingIds = myOpenings.map(o => o.id);
-      const { data: slots, error: sErr } = await supabase
-        .from("opening_slots")
-        .select("*")
-        .in("opening_id", openingIds);
-
-      if (sErr) { set($("mySlotStatus"), sErr.message, "err"); return; }
-
-      const openingById = new Map(myOpenings.map(o => [o.id, o]));
-
-      (slots || []).forEach(s => {
-        const o = openingById.get(s.opening_id);
-        const d = divisionMap.get(o?.division_id);
-        const divLabel = d ? d.name : (o?.division_id || "—");
-
-        const parts = [];
-        if (s.target_max_lbs != null) parts.push(`≤${s.target_max_lbs}`);
-        if (s.range_min_lbs != null && s.range_max_lbs != null) parts.push(`${s.range_min_lbs}-${s.range_max_lbs}`);
-        const weightLabel = parts.length ? parts.join(" / ") : "TBD";
-
-        const opt = document.createElement("option");
-        opt.value = s.id;
-        opt.textContent = `${o?.teams?.team_name || "My Team"} • ${divLabel} • ${weightLabel}`;
-        $("mySlotSelect").appendChild(opt);
-      });
-
-      set($("mySlotStatus"), `Loaded ${slots?.length || 0} of your slot(s).`, "ok");
-    }
-
-    // ---------- Posting ----------
-    async function postAvailability() {
-      set($("availStatus"), "Posting…", "muted");
-      try {
-        const uid = await requireUserId();
-        const tid = $("tournamentSelect").value;
-        const division_id = $("divisionSelectA").value;
-
-        const display_name = $("aName").value.trim();
-        const grade = $("aGrade").value ? Number($("aGrade").value) : null;
-        const can_make_lbs = $("aCanMake").value ? Number($("aCanMake").value) : null;
-        const notes = $("aNotes").value.trim() || null;
-
-        if (!display_name || !division_id) throw new Error("First name + division required.");
-
-        const { data: athlete, error: aErr } = await supabase
-          .from("athletes")
-          .insert({ guardian_user_id: uid, display_name, grade, can_make_lbs })
+        const { data, error } = await supabase
+          .from("tournaments")
           .select("*")
-          .single();
+          .order("start_date", { ascending: true });
 
-        if (aErr) throw aErr;
+        if (error) return set($("tournamentsStatus"), error.message, "err");
 
-        const { error: vErr } = await supabase
-          .from("athlete_availability")
-          .insert({ athlete_id: athlete.id, tournament_id: tid || null, division_id, notes, created_by: uid });
+        $("tournamentSelect").innerHTML = "";
+        data.forEach(t => {
+          const opt = document.createElement("option");
+          opt.value = t.id;
+          opt.textContent = `${t.name} (${t.start_date})`;
+          $("tournamentSelect").appendChild(opt);
+        });
 
-        if (vErr) throw vErr;
+        set($("tournamentsStatus"), `Loaded ${data.length} tournament(s).`, "ok");
 
-        set($("availStatus"), "Availability posted ✅", "ok");
+        await loadDivisionsForSelectedTournament();
         await refreshBoard();
-      } catch (e) {
-        set($("availStatus"), e.message, "err");
+        await loadMySlots();
       }
-    }
 
-    async function postOpening() {
-      set($("openingStatus"), "Posting…", "muted");
-      try {
-        const uid = await requireUserId();
+      async function loadDivisionsForSelectedTournament() {
+        divisionMap.clear();
+
+        $("divisionFilter").innerHTML = "";
+        $("divisionSelectA").innerHTML = "";
+        $("divisionSelectT").innerHTML = "";
+
         const tid = $("tournamentSelect").value;
-        const division_id = $("divisionSelectT").value;
+        if (!tid) return;
 
-        const team_name = $("teamName").value.trim();
-        const notes = $("oNotes").value.trim() || null;
-
-        const target_max_lbs = $("slotMax").value ? Number($("slotMax").value) : null;
-        const range_min_lbs = $("slotMin").value ? Number($("slotMin").value) : null;
-        const range_max_lbs = $("slotRangeMax").value ? Number($("slotRangeMax").value) : null;
-
-        if (!tid) throw new Error("Select a tournament.");
-        if (!team_name || !division_id) throw new Error("Team name + division required.");
-        if (!target_max_lbs && !(range_min_lbs != null && range_max_lbs != null)) throw new Error("Provide target max OR a min/max range.");
-
-        const { data: team, error: tErr } = await supabase
-          .from("teams")
-          .insert({ tournament_id: tid, team_name, created_by: uid })
+        const { data, error } = await supabase
+          .from("divisions")
           .select("*")
-          .single();
-        if (tErr) throw tErr;
+          .eq("tournament_id", tid)
+          .order("grade_min", { ascending: true });
 
-        const { data: opening, error: oErr } = await supabase
+        if (error) return set($("tournamentsStatus"), "Could not load divisions. " + error.message, "err");
+
+        const allOpt = document.createElement("option");
+        allOpt.value = "";
+        allOpt.textContent = "All divisions";
+        $("divisionFilter").appendChild(allOpt);
+
+        data.forEach(d => {
+          divisionMap.set(d.id, d);
+          const label = `${d.name} (grades ${d.grade_min}-${d.grade_max}, ${d.gender_policy})`;
+
+          const f = document.createElement("option");
+          f.value = d.id; f.textContent = label;
+          $("divisionFilter").appendChild(f);
+
+          const a = document.createElement("option");
+          a.value = d.id; a.textContent = label;
+          $("divisionSelectA").appendChild(a);
+          $("divisionSelectT").appendChild(a.cloneNode(true));
+        });
+      }
+
+      async function refreshBoard() {
+        const tid = $("tournamentSelect").value;
+        if (!tid) return;
+        const did = $("divisionFilter").value || null;
+        await Promise.all([loadOpenings(tid, did), loadFreeAgents(tid, did)]);
+      }
+
+      async function loadOpenings(tournamentId, divisionIdOrNull) {
+        set($("openingsStatus"), "Loading openings…", "muted");
+        $("openingsList").innerHTML = "";
+
+        let q = supabase
           .from("team_openings")
-          .insert({ team_id: team.id, division_id, notes, created_by: uid })
-          .select("*")
-          .single();
-        if (oErr) throw oErr;
+          .select("id, team_id, division_id, notes, status, created_at, teams!inner(team_name, tournament_id)")
+          .eq("teams.tournament_id", tournamentId)
+          .eq("status", "ACTIVE")
+          .order("created_at", { ascending: false });
 
-        const { error: sErr } = await supabase
+        if (divisionIdOrNull) q = q.eq("division_id", divisionIdOrNull);
+
+        const { data: openings, error: oErr } = await q;
+        if (oErr) return set($("openingsStatus"), oErr.message, "err");
+        if (!openings.length) return set($("openingsStatus"), "No openings yet.", "muted");
+
+        const openingIds = openings.map(o => o.id);
+        const { data: slots, error: sErr } = await supabase
           .from("opening_slots")
-          .insert({ opening_id: opening.id, target_max_lbs, range_min_lbs, range_max_lbs, quantity: 1 });
-        if (sErr) throw sErr;
+          .select("*")
+          .in("opening_id", openingIds);
 
-        set($("openingStatus"), "Opening posted ✅", "ok");
+        if (sErr) return set($("openingsStatus"), sErr.message, "err");
+
+        const slotsByOpening = new Map();
+        (slots || []).forEach(s => {
+          if (!slotsByOpening.has(s.opening_id)) slotsByOpening.set(s.opening_id, []);
+          slotsByOpening.get(s.opening_id).push(s);
+        });
+
+        openings.forEach(o => {
+          const d = divisionMap.get(o.division_id);
+          const divLabel = d ? d.name : o.division_id;
+
+          const slotLines = (slotsByOpening.get(o.id) || []).map(s => {
+            const parts = [];
+            if (s.target_max_lbs != null) parts.push(`≤ ${s.target_max_lbs} lbs`);
+            if (s.range_min_lbs != null && s.range_max_lbs != null) parts.push(`${s.range_min_lbs}–${s.range_max_lbs} lbs`);
+            if (!parts.length) parts.push("Weight TBD");
+            return `• ${parts.join(" / ")} (qty ${s.quantity})`;
+          });
+
+          const item = document.createElement("div");
+          item.className = "item";
+          item.innerHTML = `
+            <h4>${esc(o.teams.team_name)} <span class="pill">${esc(divLabel)}</span></h4>
+            <div class="muted">${o.notes ? esc(o.notes) : ""}</div>
+            <div style="margin-top:8px; font-size: 13px;">
+              <b>Slots:</b><br/>
+              ${slotLines.length ? slotLines.map(x => esc(x)).join("<br/>") : "—"}
+            </div>
+          `;
+          $("openingsList").appendChild(item);
+        });
+
+        set($("openingsStatus"), `Showing ${openings.length} opening(s).`, "ok");
+      }
+
+      async function loadFreeAgents(tournamentId, divisionIdOrNull) {
+        set($("agentsStatus"), "Loading free agents…", "muted");
+        $("agentsList").innerHTML = "";
+
+        let q = supabase
+          .from("public_free_agents")
+          .select("*")
+          .eq("tournament_id", tournamentId)
+          .order("created_at", { ascending: false });
+
+        if (divisionIdOrNull) q = q.eq("division_id", divisionIdOrNull);
+
+        const { data, error } = await q;
+        if (error) return set($("agentsStatus"), error.message, "err");
+        if (!data.length) return set($("agentsStatus"), "No free agents posted yet.", "muted");
+
+        const session = await getSession();
+        const loggedIn = !!session?.user?.id;
+        const slotId = $("mySlotSelect").value || "";
+
+        data.forEach(a => {
+          const d = divisionMap.get(a.division_id);
+          const divLabel = d ? d.name : a.division_id;
+
+          const canMake = (a.can_make_lbs == null) ? "—" : `≤ ${a.can_make_lbs} lbs`;
+          const grade = (a.grade == null) ? "—" : a.grade;
+
+          const item = document.createElement("div");
+          item.className = "item";
+          item.innerHTML = `
+            <h4>${esc(a.first_name)} <span class="pill">${esc(divLabel)}</span></h4>
+            <div style="font-size: 13px;">
+              <b>Grade:</b> ${esc(String(grade))} &nbsp; • &nbsp; <b>Can make:</b> ${esc(String(canMake))}
+            </div>
+            <div class="row" style="margin-top:10px;">
+              <button data-availability="${esc(a.availability_id)}" ${(!loggedIn || !slotId) ? "disabled" : ""}>
+                Request this free agent (fills my selected slot)
+              </button>
+            </div>
+            <div class="muted" style="margin-top:6px;">
+              ${(!loggedIn) ? "Log in to request." : (!slotId ? "Select one of your slots above to enable requests." : "")}
+            </div>
+          `;
+
+          item.querySelector("button").addEventListener("click", async (evt) => {
+            try {
+              const uid = await requireUserId();
+              const slot_id = $("mySlotSelect").value;
+              const availability_id = evt.target.getAttribute("data-availability");
+              if (!slot_id) throw new Error("Select your slot first.");
+
+              const { error: insErr } = await supabase
+                .from("match_requests")
+                .insert({ slot_id, availability_id, requested_by: uid });
+
+              if (insErr) throw insErr;
+
+              set($("agentsStatus"), "Request sent ✅", "ok");
+            } catch (e) {
+              set($("agentsStatus"), e.message, "err");
+            }
+          });
+
+          $("agentsList").appendChild(item);
+        });
+
+        set($("agentsStatus"), `Showing ${data.length} free agent(s).`, "ok");
+      }
+
+      async function loadMySlots() {
+        $("mySlotSelect").innerHTML = "";
+        set($("mySlotStatus"), "", "muted");
+
+        const tid = $("tournamentSelect").value;
+        if (!tid) return;
+
+        const session = await getSession();
+        const uid = session?.user?.id;
+
+        if (!uid) {
+          const opt = document.createElement("option");
+          opt.value = "";
+          opt.textContent = "Sign in to select your slot";
+          $("mySlotSelect").appendChild(opt);
+          return;
+        }
+
+        const { data: myOpenings, error: oErr } = await supabase
+          .from("team_openings")
+          .select("id, division_id, created_at, teams!inner(team_name, tournament_id)")
+          .eq("created_by", uid)
+          .eq("teams.tournament_id", tid)
+          .order("created_at", { ascending: false });
+
+        if (oErr) return set($("mySlotStatus"), oErr.message, "err");
+
+        if (!myOpenings.length) {
+          const opt = document.createElement("option");
+          opt.value = "";
+          opt.textContent = "No slots yet (create an opening below)";
+          $("mySlotSelect").appendChild(opt);
+          return;
+        }
+
+        const openingIds = myOpenings.map(o => o.id);
+        const { data: slots, error: sErr } = await supabase
+          .from("opening_slots")
+          .select("*")
+          .in("opening_id", openingIds);
+
+        if (sErr) return set($("mySlotStatus"), sErr.message, "err");
+
+        const openingById = new Map(myOpenings.map(o => [o.id, o]));
+        (slots || []).forEach(s => {
+          const o = openingById.get(s.opening_id);
+          const d = divisionMap.get(o?.division_id);
+          const divLabel = d ? d.name : (o?.division_id || "—");
+
+          const parts = [];
+          if (s.target_max_lbs != null) parts.push(`≤${s.target_max_lbs}`);
+          if (s.range_min_lbs != null && s.range_max_lbs != null) parts.push(`${s.range_min_lbs}-${s.range_max_lbs}`);
+          const weightLabel = parts.length ? parts.join(" / ") : "TBD";
+
+          const opt = document.createElement("option");
+          opt.value = s.id;
+          opt.textContent = `${o?.teams?.team_name || "My Team"} • ${divLabel} • ${weightLabel}`;
+          $("mySlotSelect").appendChild(opt);
+        });
+
+        set($("mySlotStatus"), `Loaded ${slots?.length || 0} slot(s).`, "ok");
+      }
+
+      async function postAvailability() {
+        set($("availStatus"), "Posting…", "muted");
+        try {
+          const uid = await requireUserId();
+          const tid = $("tournamentSelect").value;
+          const division_id = $("divisionSelectA").value;
+
+          const display_name = $("aName").value.trim();
+          const grade = $("aGrade").value ? Number($("aGrade").value) : null;
+          const can_make_lbs = $("aCanMake").value ? Number($("aCanMake").value) : null;
+          const notes = $("aNotes").value.trim() || null;
+
+          if (!display_name || !division_id) throw new Error("First name + division required.");
+
+          const { data: athlete, error: aErr } = await supabase
+            .from("athletes")
+            .insert({ guardian_user_id: uid, display_name, grade, can_make_lbs })
+            .select("*")
+            .single();
+
+          if (aErr) throw aErr;
+
+          const { error: vErr } = await supabase
+            .from("athlete_availability")
+            .insert({ athlete_id: athlete.id, tournament_id: tid || null, division_id, notes, created_by: uid });
+
+          if (vErr) throw vErr;
+
+          set($("availStatus"), "Availability posted ✅", "ok");
+          await refreshBoard();
+        } catch (e) {
+          set($("availStatus"), e.message, "err");
+        }
+      }
+
+      async function postOpening() {
+        set($("openingStatus"), "Posting…", "muted");
+        try {
+          const uid = await requireUserId();
+          const tid = $("tournamentSelect").value;
+          const division_id = $("divisionSelectT").value;
+
+          const team_name = $("teamName").value.trim();
+          const notes = $("oNotes").value.trim() || null;
+
+          const target_max_lbs = $("slotMax").value ? Number($("slotMax").value) : null;
+          const range_min_lbs = $("slotMin").value ? Number($("slotMin").value) : null;
+          const range_max_lbs = $("slotRangeMax").value ? Number($("slotRangeMax").value) : null;
+
+          if (!tid) throw new Error("Select a tournament.");
+          if (!team_name || !division_id) throw new Error("Team name + division required.");
+          if (!target_max_lbs && !(range_min_lbs != null && range_max_lbs != null)) throw new Error("Provide target max OR a min/max range.");
+
+          const { data: team, error: tErr } = await supabase
+            .from("teams")
+            .insert({ tournament_id: tid, team_name, created_by: uid })
+            .select("*")
+            .single();
+          if (tErr) throw tErr;
+
+          const { data: opening, error: oErr } = await supabase
+            .from("team_openings")
+            .insert({ team_id: team.id, division_id, notes, created_by: uid })
+            .select("*")
+            .single();
+          if (oErr) throw oErr;
+
+          const { error: sErr } = await supabase
+            .from("opening_slots")
+            .insert({ opening_id: opening.id, target_max_lbs, range_min_lbs, range_max_lbs, quantity: 1 });
+          if (sErr) throw sErr;
+
+          set($("openingStatus"), "Opening posted ✅", "ok");
+          await loadMySlots();
+          await refreshBoard();
+        } catch (e) {
+          set($("openingStatus"), e.message, "err");
+        }
+      }
+
+      // ---------- Wire buttons ----------
+      $("btnSignIn").addEventListener("click", async () => {
+        set($("authStatus"), "Signing in…", "muted");
+        const email = $("email").value.trim();
+        const password = $("password").value;
+        const { error } = await supabase.auth.signInWithPassword({ email, password });
+        if (error) return set($("authStatus"), error.message, "err");
+        await refreshAuthUI();
+        await refreshBoard();
+      });
+
+      $("btnSignUp").addEventListener("click", async () => {
+        set($("authStatus"), "Signing up…", "muted");
+        const email = $("email").value.trim();
+        const password = $("password").value;
+        const { error } = await supabase.auth.signUp({ email, password });
+        if (error) return set($("authStatus"), error.message, "err");
+        set($("authStatus"), "Sign-up created ✅ (check email if confirmation enabled)", "ok");
+        await refreshAuthUI();
+      });
+
+      $("btnSignOut").addEventListener("click", async () => {
+        set($("authStatus"), "Signing out…", "muted");
+        const { error } = await supabase.auth.signOut();
+        if (error) return set($("authStatus"), error.message, "err");
+        await refreshAuthUI();
+        await refreshBoard();
+      });
+
+      $("btnLoadTournaments").addEventListener("click", loadTournaments);
+      $("btnRefreshBoard").addEventListener("click", refreshBoard);
+      $("btnPostAvailability").addEventListener("click", postAvailability);
+      $("btnPostOpening").addEventListener("click", postOpening);
+
+      $("tournamentSelect").addEventListener("change", async () => {
+        await loadDivisionsForSelectedTournament();
         await loadMySlots();
         await refreshBoard();
-      } catch (e) {
-        set($("openingStatus"), e.message, "err");
-      }
+      });
+
+      $("divisionFilter").addEventListener("change", refreshBoard);
+      $("mySlotSelect").addEventListener("change", refreshBoard);
+
+      // ---------- Boot ----------
+      set($("authStatus"), "Script loaded ✅", "ok");
+      supabase.auth.onAuthStateChange(() => refreshAuthUI().catch(()=>{}));
+
+      (async () => {
+        await refreshAuthUI();
+        await loadTournaments();
+      })();
     }
 
-    // ---------- Wire up buttons ----------
-    $("btnSignIn").addEventListener("click", async () => {
-      set($("authStatus"), "Signing in…", "muted");
-      const email = $("email").value.trim();
-      const password = $("password").value;
-      const { error } = await supabase.auth.signInWithPassword({ email, password });
-      if (error) return set($("authStatus"), error.message, "err");
-      await refreshAuthUI();
-      await refreshBoard();
-    });
-
-    $("btnSignUp").addEventListener("click", async () => {
-      set($("authStatus"), "Signing up…", "muted");
-      const email = $("email").value.trim();
-      const password = $("password").value;
-      const { error } = await supabase.auth.signUp({ email, password });
-      if (error) return set($("authStatus"), error.message, "err");
-      set($("authStatus"), "Sign-up created ✅ (check email if confirmation enabled)", "ok");
-      await refreshAuthUI();
-    });
-
-    $("btnSignOut").addEventListener("click", async () => {
-      set($("authStatus"), "Signing out…", "muted");
-      const { error } = await supabase.auth.signOut();
-      if (error) return set($("authStatus"), error.message, "err");
-      await refreshAuthUI();
-      await refreshBoard();
-    });
-
-    $("btnLoadTournaments").addEventListener("click", loadTournaments);
-    $("btnRefreshBoard").addEventListener("click", refreshBoard);
-
-    $("tournamentSelect").addEventListener("change", async () => {
-      await loadDivisionsForSelectedTournament();
-      await loadMySlots();
-      await refreshBoard();
-    });
-
-    $("divisionFilter").addEventListener("change", refreshBoard);
-    $("mySlotSelect").addEventListener("change", refreshBoard);
-
-    $("btnPostAvailability").addEventListener("click", postAvailability);
-    $("btnPostOpening").addEventListener("click", postOpening);
-
-    // ---------- Boot ----------
-    set($("authStatus"), "Script loaded ✅", "ok");
-    supabase.auth.onAuthStateChange(() => refreshAuthUI().catch(()=>{}));
-
     (async () => {
-      await refreshAuthUI();
-      await loadTournaments();
+      const ok = await ensureSupabaseLoaded();
+      if (!ok) {
+        set($("authStatus"), "Failed to load Supabase library (blocked/timeout). Disable blockers or try another network.", "err");
+        return;
+      }
+      startApp();
     })();
+  })();
   </script>
 </body>
 </html>
