@@ -364,7 +364,15 @@
         .limit(1)
         .maybeSingle();
 
-      if (error) return set($("contactStatus"), error.message, "err");
+      if (error) {
+        const msg = String(error.message || "");
+        if (msg.toLowerCase().includes("user_contact_phone_or_email_chk") ||
+            msg.toLowerCase().includes("check constraint") ||
+            msg.toLowerCase().includes("slot_qty_chk")) {
+          return set($("contactStatus"), "Please provide at least a phone number or an email.", "err");
+        }
+        return set($("contactStatus"), msg, "err");
+      }
 
       $("contactName").value = data?.display_name || "";
       $("contactPhone").value = data?.phone || "";
@@ -396,17 +404,39 @@
     }
 
     function formatContactRow(label, c) {
-      if (!c) return `<div class="muted">${esc(label)}: —</div>`;
-      const name = c.display_name ? esc(c.display_name) : "—";
-      const phone = c.phone ? esc(c.phone) : "—";
-      const email = c.email ? esc(c.email) : "—";
+      const lbl = esc(label);
+
+      // No contact row found at all
+      if (!c) {
+        return `<div style="font-size:13px;"><b>${lbl}:</b> <span class="muted">Contact not added yet.</span></div>`;
+      }
+
+      const nameVal = (c.display_name || "").trim();
+      const phoneVal = (c.phone || "").trim();
+      const emailVal = (c.email || "").trim();
+
+      const name = nameVal ? esc(nameVal) : "—";
+      const phone = phoneVal ? esc(phoneVal) : "";
+      const email = emailVal ? esc(emailVal) : "";
+
+      // Row exists but no usable contact methods
+      if (!phone && !email) {
+        return `
+          <div style="font-size:13px;">
+            <b>${lbl}:</b> ${name}<br/>
+            <span class="muted">No phone/email on file yet.</span>
+          </div>
+        `;
+      }
+
       return `
         <div style="font-size:13px;">
-          <b>${esc(label)}:</b> ${name}<br/>
-          <span class="muted">Phone:</span> ${phone} &nbsp; • &nbsp; <span class="muted">Email:</span> ${email}
+          <b>${lbl}:</b> ${name}<br/>
+          <span class="muted">Phone:</span> ${phone || "—"} &nbsp; • &nbsp; <span class="muted">Email:</span> ${email || "—"}
         </div>
       `;
     }
+
 
     async function revealContacts(requestId, targetEl) {
       set(targetEl, "Loading contact…", "muted");
