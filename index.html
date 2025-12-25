@@ -203,6 +203,17 @@
         <div id="adminAvailList" class="list"></div>
       </div>
     </div>
+
+    <div style="margin-top:14px;">
+      <h4 style="margin:0 0 6px 0;">Activity log</h4>
+      <div class="row">
+        <button id="btnAdminLoadActivity" class="secondary" style="max-width:220px;">Load latest activity</button>
+        <button id="btnAdminClearActivity" class="secondary" style="max-width:220px;">Clear</button>
+      </div>
+      <div id="adminActivityStatus" class="muted" style="margin-top:6px;"></div>
+      <div id="adminActivityList" class="list" style="margin-top:10px;"></div>
+    </div>
+
   </div>
 
 
@@ -569,6 +580,8 @@
       };
 
       await loadAdminQueues();
+      await loadAdminActivity();
+
     }
 
     async function loadAdminQueues() {
@@ -610,7 +623,7 @@
                   p_state: state
                 });
                 if (error) throw error;
-                await Promise.allSettled([refreshBoard(), loadMySlots(), loadMyRequests(), loadAdminQueues()]);
+                await Promise.allSettled([refreshBoard(), loadMySlots(), loadMyRequests(), loadAdminQueues(), loadAdminActivity()]);
               } catch (e) {
                 set($("adminOpeningsStatus"), e.message, "err");
               }
@@ -659,7 +672,7 @@
                   p_state: state
                 });
                 if (error) throw error;
-                await Promise.allSettled([refreshBoard(), loadMySlots(), loadMyRequests(), loadAdminQueues()]);
+                await Promise.allSettled([refreshBoard(), loadMySlots(), loadMyRequests(), loadAdminQueues(), loadAdminActivity()]);
               } catch (e) {
                 set($("adminAvailStatus"), e.message, "err");
               }
@@ -672,6 +685,49 @@
 
 
 // ---------- Tournaments / Divisions ----------
+    async function loadAdminActivity() {
+      const tid = $("tournamentSelect").value;
+      if (!isAdmin() || !tid) return;
+
+      $("btnAdminLoadActivity").onclick = async () => { await loadAdminActivity(); };
+      $("btnAdminClearActivity").onclick = () => {
+        $("adminActivityList").innerHTML = "";
+        set($("adminActivityStatus"), "Cleared.", "muted");
+      };
+
+      set($("adminActivityStatus"), "Loading activity…", "muted");
+      $("adminActivityList").innerHTML = "";
+
+      const { data, error } = await supabase
+        .from("activity_log")
+        .select("created_at, action, entity_type, entity_id, message, actor_user_id, tournament_id")
+        .eq("tournament_id", tid)
+        .order("created_at", { ascending: false })
+        .limit(50);
+
+      if (error) return set($("adminActivityStatus"), error.message, "err");
+      if (!data || !data.length) return set($("adminActivityStatus"), "No activity yet.", "muted");
+
+      data.forEach(r => {
+        const item = document.createElement("div");
+        item.className = "item";
+        const when = new Date(r.created_at).toLocaleString();
+        item.innerHTML = `
+          <div style="display:flex; justify-content:space-between; gap:10px;">
+            <div><b>${esc(r.action)}</b> <span class="pill">${esc(r.entity_type)}</span></div>
+            <div class="muted">${esc(when)}</div>
+          </div>
+          <div class="muted" style="margin-top:6px;">
+            ${r.message ? esc(r.message) : ""} ${r.entity_id ? ("<span class='muted'>(" + esc(r.entity_id) + ")</span>") : ""}
+          </div>
+        `;
+        $("adminActivityList").appendChild(item);
+      });
+
+      set($("adminActivityStatus"), `Loaded ${data.length} activity item(s).`, "ok");
+    }
+
+
     async function loadTournaments() {
       set($("tournamentsStatus"), "Loading tournaments…", "muted");
       const { data, error } = await supabase.from("tournaments").select("*").order("start_date", { ascending: true });
