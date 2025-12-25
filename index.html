@@ -37,13 +37,29 @@
   <h1>FreeAgent MVP</h1>
   <div class="muted">Public board: view tournaments/openings/free agents. Log in to post or request.</div>
 
+  <div class="card" id="tournamentLandingBanner" style="display:none; margin-top:14px;">
+    <div style="display:flex; justify-content:space-between; align-items:center; gap:12px; flex-wrap:wrap;">
+      <div>
+        <div class="muted" style="margin-bottom:4px;">Tournament view</div>
+        <div style="font-size:18px; font-weight:700;" id="tournamentLandingTitle">Loading…</div>
+      </div>
+      <div class="row" style="gap:10px; align-items:flex-end;">
+        <button id="btnLandingCopyLink" class="secondary" style="max-width:220px;">Copy share link</button>
+        <button id="btnLandingClear" class="secondary" style="max-width:220px;">Change tournament</button>
+      </div>
+    </div>
+    <div class="muted" style="margin-top:8px;" id="tournamentLandingHint">
+      This page is filtered to a single tournament for easy sharing.
+    </div>
+  </div>
+
   <noscript>
     <div style="margin-top:10px;color:#b00020;font-weight:800;">
       JavaScript is disabled or blocked. This site will not work until scripts are allowed.
     </div>
   </noscript>
 
-  <div class="card" style="margin-top:14px;">
+  <div class="card" id="authCard" style="margin-top:14px;">
     <h3>Auth</h3>
     <div id="authStatus" class="muted">Loading…</div>
 
@@ -68,7 +84,7 @@
   <div class="grid" style="margin-top:14px;">
     <div class="card">
       <h3>Tournaments</h3>
-      <div class="row">
+      <div class="row" id="tournamentPickerRow">
         <button id="btnLoadTournaments">Load</button>
         <button id="btnRefreshBoard" class="secondary">Refresh board</button>
       </div>
@@ -286,6 +302,29 @@
   const set = (el, msg, cls="muted") => { if (el) { el.className = cls; el.textContent = msg; } };
   const dump = (obj) => { const el = $("sessionDump"); if (el) el.textContent = JSON.stringify(obj, null, 2); };
   const esc = (s) => String(s ?? "").replace(/[&<>"']/g, ch => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[ch]));
+
+    // Tournament landing page params:
+    // ?t=<tournament_id_or_name> locks the view to a single tournament for sharing.
+    // Optional: ?public=1 hides the Auth card for a pure public-facing link.
+    const qs = new URLSearchParams(location.search);
+    const landingTournamentParam = (qs.get("t") || qs.get("tournament_id") || qs.get("tid") || "").trim();
+    const landingPublicOnly = (qs.get("public") === "1");
+
+    function buildShareUrl(tournamentId) {
+      const u = new URL(location.href);
+      u.searchParams.set("t", tournamentId);
+      if (landingPublicOnly) u.searchParams.set("public", "1");
+      return u.toString();
+    }
+
+    function clearLandingParams() {
+      const u = new URL(location.href);
+      u.searchParams.delete("t");
+      u.searchParams.delete("tournament_id");
+      u.searchParams.delete("tid");
+      u.searchParams.delete("public");
+      location.href = u.toString();
+    }
 
   // Make failures visible (no more silent hangs)
   window.addEventListener("error", (e) => set($("authStatus"), "JS error: " + (e.message || e.type), "err"));
@@ -743,6 +782,38 @@
       });
 
       set($("tournamentsStatus"), `Loaded ${data.length} tournament(s).`, "ok");
+
+      // Apply tournament landing param (if present)
+      if (landingTournamentParam) {
+        const sel = $("tournamentSelect");
+
+        if (Array.from(sel.options).some(o => o.value === landingTournamentParam)) {
+          sel.value = landingTournamentParam;
+        } else {
+          const target = landingTournamentParam.toLowerCase();
+          const opt = Array.from(sel.options).find(o => (o.textContent || "").toLowerCase().includes(target));
+          if (opt) sel.value = opt.value;
+        }
+
+        $("tournamentLandingBanner").style.display = "block";
+        const selectedOpt = sel.options[sel.selectedIndex];
+        $("tournamentLandingTitle").textContent = selectedOpt ? selectedOpt.textContent : "Tournament";
+
+        $("btnLandingCopyLink").onclick = async () => {
+          try {
+            await navigator.clipboard.writeText(buildShareUrl(sel.value));
+            set($("tournamentLandingHint"), "Copied share link to clipboard.", "ok");
+          } catch (e) {
+            const url = buildShareUrl(sel.value);
+            prompt("Copy this link:", url);
+          }
+        };
+
+        $("btnLandingClear").onclick = () => clearLandingParams();
+
+        const picker = document.getElementById("tournamentPickerRow");
+        if (picker) picker.style.display = "none";
+      }
       await loadDivisionsForSelectedTournament();
       await refreshBoard();
       loadMyRequests().catch(()=>{});
@@ -1313,6 +1384,7 @@ const item = document.createElement("div");
     (async () => {
       refreshAuthUI().catch(()=>{});
       await loadTournaments();
+      if (landingPublicOnly) { const ac = document.getElementById('authCard'); if (ac) ac.style.display='none'; }
       loadMyRequests().catch(()=>{});
     })();
   }
