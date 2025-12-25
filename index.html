@@ -814,7 +814,6 @@
 
       const openingIds = openings.map(o => o.id);
       const { data: slots, error: sErr } = await supabase.from("opening_slots").select("*").in("opening_id", openingIds);
-      if (_seq !== mySlotsLoadSeq) return;
       if (sErr) return set($("openingsStatus"), sErr.message, "err");
 
       const slotsByOpening = new Map();
