@@ -111,7 +111,34 @@
   </div>
 
 
+  
   <div class="card" style="margin-top:14px;">
+    <h3>My Contact</h3>
+    <div class="muted">Saved contact is only shared after a request is <b>ACCEPTED</b>.</div>
+    <div id="contactStatus" class="muted" style="margin-top:8px;">Sign in to save your contact.</div>
+
+    <div class="row" style="margin-top:10px;">
+      <div style="flex:2;">
+        <label>Display name</label>
+        <input id="contactName" placeholder="Parent / coach name" />
+      </div>
+      <div style="flex:1;">
+        <label>Phone</label>
+        <input id="contactPhone" placeholder="555-555-5555" />
+      </div>
+      <div style="flex:2;">
+        <label>Email</label>
+        <input id="contactEmail" type="email" placeholder="you@email.com" />
+      </div>
+    </div>
+
+    <div class="row" style="margin-top:10px;">
+      <button id="btnSaveContact">Save contact</button>
+      <button id="btnReloadContact" class="secondary">Reload</button>
+    </div>
+  </div>
+
+<div class="card" style="margin-top:14px;">
     <h3>My Requests</h3>
     <div id="requestsStatus" class="muted">Sign in to view and manage your requests.</div>
 
@@ -318,6 +345,94 @@
       return uid;
     }
 
+    // ---------- Contact Exchange ----------
+    async function loadMyContact() {
+      const session = await getSession().catch(() => null);
+      const uid = session?.user?.id;
+      if (!uid) {
+        set($("contactStatus"), "Sign in to save your contact.", "muted");
+        return;
+      }
+
+      $("contactEmail").value = session?.user?.email || $("contactEmail").value || "";
+      set($("contactStatus"), "Loading your contact…", "muted");
+
+      const { data, error } = await supabase
+        .from("user_contact")
+        .select("*")
+        .eq("user_id", uid)
+        .limit(1)
+        .maybeSingle();
+
+      if (error) return set($("contactStatus"), error.message, "err");
+
+      $("contactName").value = data?.display_name || "";
+      $("contactPhone").value = data?.phone || "";
+      $("contactEmail").value = data?.email || (session?.user?.email || "");
+
+      set($("contactStatus"), data ? "Contact loaded ✅" : "No contact saved yet. Add it and click Save.", data ? "ok" : "muted");
+    }
+
+    async function saveMyContact() {
+      const session = await getSession().catch(() => null);
+      const uid = session?.user?.id;
+      if (!uid) return set($("contactStatus"), "Sign in first.", "err");
+
+      const payload = {
+        user_id: uid,
+        display_name: ($("contactName").value || "").trim() || null,
+        phone: ($("contactPhone").value || "").trim() || null,
+        email: ($("contactEmail").value || session?.user?.email || "").trim() || null,
+        updated_at: new Date().toISOString()
+      };
+
+      set($("contactStatus"), "Saving…", "muted");
+      const { error } = await supabase
+        .from("user_contact")
+        .upsert(payload, { onConflict: "user_id" });
+
+      if (error) return set($("contactStatus"), error.message, "err");
+      set($("contactStatus"), "Saved ✅", "ok");
+    }
+
+    function formatContactRow(label, c) {
+      if (!c) return `<div class="muted">${esc(label)}: —</div>`;
+      const name = c.display_name ? esc(c.display_name) : "—";
+      const phone = c.phone ? esc(c.phone) : "—";
+      const email = c.email ? esc(c.email) : "—";
+      return `
+        <div style="font-size:13px;">
+          <b>${esc(label)}:</b> ${name}<br/>
+          <span class="muted">Phone:</span> ${phone} &nbsp; • &nbsp; <span class="muted">Email:</span> ${email}
+        </div>
+      `;
+    }
+
+    async function revealContacts(requestId, targetEl) {
+      set(targetEl, "Loading contact…", "muted");
+      const { data, error } = await supabase
+        .rpc("get_request_contacts", { p_request_id: requestId });
+
+      if (error) {
+        set(targetEl, error.message, "err");
+        return;
+      }
+
+      const team = data?.team_contact || null;
+      const agent = data?.agent_contact || null;
+
+      targetEl.className = "";
+      targetEl.innerHTML = `
+        <div style="margin-top:8px; border:1px solid #eee; border-radius:12px; padding:10px;">
+          ${formatContactRow("Team", team)}
+          <div style="height:8px;"></div>
+          ${formatContactRow("Free Agent", agent)}
+        </div>
+      `;
+    }
+
+
+
     async function refreshAuthUI() {
       const session = await getSession().catch(() => null);
       if (session?.user?.id) set($("authStatus"), `Signed in ✅ ${session.user.email}`, "ok");
@@ -325,6 +440,7 @@
 
       // Don’t let these block auth
       loadMySlots().catch(()=>{});
+      loadMyContact().catch(()=>{});
       loadMyRequests().catch(()=>{});
       refreshAdminUI().catch(()=>{});
     }
@@ -790,13 +906,21 @@ const item = document.createElement("div");
           <div class="row" style="margin-top:10px;">
             <button data-id="${esc(r.request_id)}" data-action="ACCEPTED" ${(pending || accepted) ? "" : "disabled"}>Accept</button>
             <button data-id="${esc(r.request_id)}" data-action="DECLINED" class="secondary" ${(pending || accepted) ? "" : "disabled"}>Decline</button>
+            <button data-id="${esc(r.request_id)}" data-action="REVEAL" class="secondary" ${accepted ? "" : "disabled"}>Reveal contact</button>
           </div>
+          <div id="contact-${esc(r.request_id)}" class="muted" style="margin-top:8px;"></div>
         `;
         item.querySelectorAll("button").forEach(btn => {
           btn.addEventListener("click", async (e) => {
             try {
               const id = e.target.getAttribute("data-id");
               const next = e.target.getAttribute("data-action");
+
+              if (next === "REVEAL") {
+                const box = document.getElementById("contact-" + id) || item.querySelector("#contact-" + CSS.escape(id));
+                await revealContacts(id, box || item);
+                return;
+              }
 
               let error;
               if (next === "ACCEPTED") {
@@ -836,22 +960,34 @@ const item = document.createElement("div");
             <b>Athlete:</b> Grade ${esc(String(r.athlete_grade ?? "—"))} • Can make ${esc(String(r.athlete_can_make_lbs ?? "—"))}
           </div>
           <div class="row" style="margin-top:10px;">
-            <button data-id="${esc(r.request_id)}" ${(pending || accepted) ? "" : "disabled"} class="secondary">${accepted ? "Cancel (re-open)" : "Cancel"}</button>
+            <button data-id="${esc(r.request_id)}" data-action="CANCEL" ${(pending || accepted) ? "" : "disabled"} class="secondary">${accepted ? "Cancel (re-open)" : "Cancel"}</button>
+            <button data-id="${esc(r.request_id)}" data-action="REVEAL" class="secondary" ${accepted ? "" : "disabled"}>Reveal contact</button>
           </div>
+          <div id="contact-${esc(r.request_id)}" class="muted" style="margin-top:8px;"></div>
         `;
-        item.querySelector("button").addEventListener("click", async (e) => {
-          try {
-            const id = e.target.getAttribute("data-id");
-            const { data, error } = await supabase
-              .rpc("cancel_match_request", { p_request_id: id });
+        item.querySelectorAll("button").forEach(btn => {
+          btn.addEventListener("click", async (e) => {
+            try {
+              const id = e.target.getAttribute("data-id");
+              const action = e.target.getAttribute("data-action") || "CANCEL";
 
-            if (error) throw error;
-            await loadMyRequests();
-            await refreshBoard();
-            loadMySlots().catch(()=>{});
-          } catch (err) {
-            set($("requestsStatus"), err.message, "err");
-          }
+              if (action === "REVEAL") {
+                const box = document.getElementById("contact-" + id) || item.querySelector("#contact-" + CSS.escape(id));
+                await revealContacts(id, box || item);
+                return;
+              }
+
+              const { error } = await supabase
+                .rpc("cancel_match_request", { p_request_id: id });
+
+              if (error) throw error;
+              await loadMyRequests();
+              await refreshBoard();
+              loadMySlots().catch(()=>{});
+            } catch (err) {
+              set($("requestsStatus"), err.message, "err");
+            }
+          });
         });
 
         outgoingList.appendChild(item);
@@ -1060,7 +1196,10 @@ const item = document.createElement("div");
       }
     });
 
-    $("btnLoadTournaments").addEventListener("click", loadTournaments);
+    $("btnSaveContact").addEventListener("click", saveMyContact);
+      $("btnReloadContact").addEventListener("click", loadMyContact);
+
+            $("btnLoadTournaments").addEventListener("click", loadTournaments);
     $("btnRefreshBoard").addEventListener("click", refreshBoard);
 
     $("tournamentSelect").addEventListener("change", async () => {
