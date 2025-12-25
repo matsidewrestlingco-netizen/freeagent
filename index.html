@@ -25,6 +25,12 @@
     .item h4 { margin: 0 0 6px 0; }
     code { background: #f6f6f6; padding: 2px 6px; border-radius: 8px; }
     .pill { display:inline-block; padding: 2px 8px; border-radius: 999px; background:#f2f2f2; font-size: 12px; margin-left: 6px; }
+
+    .status-pill { display:inline-block; padding: 2px 8px; border-radius: 999px; font-size: 12px; margin-left: 6px; font-weight: 700; }
+    .status-accepted { background:#e8f6ee; color:#0a7a2f; }
+    .status-pending { background:#fff5db; color:#7a5a00; }
+    .status-declined { background:#f0f0f0; color:#555; }
+    .status-cancelled { background:#fdecef; color:#b00020; }
   </style>
 </head>
 <body>
@@ -460,6 +466,7 @@ const item = document.createElement("div");
 
             set($("agentsStatus"), "Request sent ✅", "ok");
             loadMyRequests().catch(()=>{});
+            refreshBoard().catch(()=>{});
           } catch (e) {
             set($("agentsStatus"), e.message, "err");
           }
@@ -474,11 +481,12 @@ const item = document.createElement("div");
     // ---------- My Requests ----------
     function requestStatusPill(status) {
       const s = String(status || "").toUpperCase();
-      if (s === "ACCEPTED") return `<span class="pill" style="background:#e8f6ee;color:#0a7a2f;">ACCEPTED</span>`;
-      if (s === "DECLINED") return `<span class="pill" style="background:#fdecef;color:#b00020;">DECLINED</span>`;
-      if (s === "CANCELLED") return `<span class="pill" style="background:#f3f3f3;color:#444;">CANCELLED</span>`;
-      return `<span class="pill" style="background:#fff5db;color:#7a5a00;">PENDING</span>`;
+      if (s === "ACCEPTED") return `<span class="status-pill status-accepted">ACCEPTED</span>`;
+      if (s === "DECLINED") return `<span class="status-pill status-declined">DECLINED</span>`;
+      if (s === "CANCELLED") return `<span class="status-pill status-cancelled">CANCELLED</span>`;
+      return `<span class="status-pill status-pending">PENDING</span>`;
     }
+
 
     function weightLabel(r) {
       const t = r.slot_target_max_lbs;
@@ -556,6 +564,8 @@ const item = document.createElement("div");
 
               if (error) throw error;
               await loadMyRequests();
+              await refreshBoard();
+              loadMySlots().catch(()=>{});
             } catch (err) {
               set($("requestsStatus"), err.message, "err");
             }
@@ -567,7 +577,9 @@ const item = document.createElement("div");
       function renderOutgoing(r) {
         const item = document.createElement("div");
         item.className = "item";
-        const pending = String(r.status).toUpperCase() === "PENDING";
+        const statusUp = String(r.status || "").toUpperCase();
+        const pending = statusUp === "PENDING";
+        const accepted = statusUp === "ACCEPTED";
         item.innerHTML = `
           <h4>${esc(r.athlete_first_name)} <span class="pill">${esc(r.division_name)}</span> ${requestStatusPill(r.status)}</h4>
           <div style="font-size: 13px;">
@@ -587,6 +599,8 @@ const item = document.createElement("div");
 
             if (error) throw error;
             await loadMyRequests();
+            await refreshBoard();
+            loadMySlots().catch(()=>{});
           } catch (err) {
             set($("requestsStatus"), err.message, "err");
           }
