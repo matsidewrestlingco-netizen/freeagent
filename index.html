@@ -523,6 +523,7 @@ const item = document.createElement("div");
         const item = document.createElement("div");
         item.className = "item";
         const pending = String(r.status).toUpperCase() === "PENDING";
+        const accepted = String(r.status).toUpperCase() === "ACCEPTED";
         item.innerHTML = `
           <h4>${esc(r.athlete_first_name)} <span class="pill">${esc(r.division_name)}</span> ${requestStatusPill(r.status)}</h4>
           <div style="font-size: 13px;">
@@ -531,8 +532,8 @@ const item = document.createElement("div");
             <b>Athlete:</b> Grade ${esc(String(r.athlete_grade ?? "—"))} • Can make ${esc(String(r.athlete_can_make_lbs ?? "—"))}
           </div>
           <div class="row" style="margin-top:10px;">
-            <button data-id="${esc(r.request_id)}" data-action="ACCEPTED" ${pending ? "" : "disabled"}>Accept</button>
-            <button data-id="${esc(r.request_id)}" data-action="DECLINED" class="secondary" ${pending ? "" : "disabled"}>Decline</button>
+            <button data-id="${esc(r.request_id)}" data-action="ACCEPTED" ${(pending || accepted) ? "" : "disabled"}>Accept</button>
+            <button data-id="${esc(r.request_id)}" data-action="DECLINED" class="secondary" ${(pending || accepted) ? "" : "disabled"}>Decline</button>
           </div>
         `;
         item.querySelectorAll("button").forEach(btn => {
@@ -575,16 +576,14 @@ const item = document.createElement("div");
             <b>Athlete:</b> Grade ${esc(String(r.athlete_grade ?? "—"))} • Can make ${esc(String(r.athlete_can_make_lbs ?? "—"))}
           </div>
           <div class="row" style="margin-top:10px;">
-            <button data-id="${esc(r.request_id)}" ${pending ? "" : "disabled"} class="secondary">Cancel</button>
+            <button data-id="${esc(r.request_id)}" ${(pending || accepted) ? "" : "disabled"} class="secondary">${accepted ? "Cancel (re-open)" : "Cancel"}</button>
           </div>
         `;
         item.querySelector("button").addEventListener("click", async (e) => {
           try {
             const id = e.target.getAttribute("data-id");
-            const { error } = await supabase
-              .from("match_requests")
-              .update({ status: "CANCELLED", responded_at: new Date().toISOString(), responded_by: uid })
-              .eq("id", id);
+            const { data, error } = await supabase
+              .rpc("cancel_match_request", { p_request_id: id });
 
             if (error) throw error;
             await loadMyRequests();
