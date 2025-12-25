@@ -129,6 +129,56 @@
 
 
 
+  
+  <div class="card" id="adminCard" style="margin-top:14px; display:none;">
+    <h3>Tournament Admin</h3>
+    <div id="adminStatus" class="muted"></div>
+
+    <div class="grid" style="grid-template-columns: 1fr 1fr; gap: 14px; margin-top: 10px;">
+      <div>
+        <h4 style="margin:0 0 6px 0;">Verification</h4>
+        <div class="row" style="align-items:center;">
+          <label style="margin:0; flex:1;">
+            <input id="adminVerifiedToggle" type="checkbox" style="width:auto; margin-right:8px;" />
+            Tournament is verified (official)
+          </label>
+          <button id="btnAdminSaveVerified" class="secondary" style="max-width:170px;">Save</button>
+        </div>
+        <div class="muted" style="margin-top:6px;">
+          Verified tournaments can be treated as “official”: divisions/weights are authoritative and moderation is enabled.
+        </div>
+      </div>
+
+      <div>
+        <h4 style="margin:0 0 6px 0;">Admins</h4>
+        <div class="row">
+          <input id="adminAddEmail" type="email" placeholder="user@email.com" />
+          <select id="adminAddRole" style="max-width:160px;">
+            <option value="MOD">MOD</option>
+            <option value="ADMIN">ADMIN</option>
+            <option value="OWNER">OWNER</option>
+          </select>
+        </div>
+        <button id="btnAdminAddAdmin" style="margin-top:10px;">Add / Update admin</button>
+        <div id="adminAddStatus" class="muted" style="margin-top:6px;"></div>
+      </div>
+    </div>
+
+    <div class="grid" style="grid-template-columns: 1fr 1fr; gap: 14px; margin-top: 14px;">
+      <div>
+        <h4 style="margin:0 0 6px 0;">Moderate openings</h4>
+        <div id="adminOpeningsStatus" class="muted"></div>
+        <div id="adminOpeningsList" class="list"></div>
+      </div>
+      <div>
+        <h4 style="margin:0 0 6px 0;">Moderate free agents</h4>
+        <div id="adminAvailStatus" class="muted"></div>
+        <div id="adminAvailList" class="list"></div>
+      </div>
+    </div>
+  </div>
+
+
   <hr style="margin:18px 0;border:none;border-top:1px solid #eee;" />
 
   <div class="grid">
@@ -276,9 +326,206 @@
       // Don’t let these block auth
       loadMySlots().catch(()=>{});
       loadMyRequests().catch(()=>{});
+      refreshAdminUI().catch(()=>{});
     }
 
-    // ---------- Tournaments / Divisions ----------
+    
+    // ---------- Tournament Admin Mode ----------
+    let _adminRole = null;
+
+    function isAdmin() { return !!_adminRole; }
+
+    function modPill(state) {
+      const s = String(state || "VISIBLE").toUpperCase();
+      if (s === "VISIBLE") return `<span class="status-pill status-accepted">VISIBLE</span>`;
+      if (s === "HIDDEN") return `<span class="status-pill status-declined">HIDDEN</span>`;
+      if (s === "REMOVED") return `<span class="status-pill status-cancelled">REMOVED</span>`;
+      return `<span class="status-pill status-declined">${esc(s)}</span>`;
+    }
+
+    async function refreshAdminUI() {
+      const card = $("adminCard");
+      const tid = $("tournamentSelect").value;
+      _adminRole = null;
+      card.style.display = "none";
+      set($("adminStatus"), "", "muted");
+      set($("adminAddStatus"), "", "muted");
+
+      const session = await getSession().catch(()=>null);
+      const uid = session?.user?.id;
+      if (!uid || !tid) return;
+
+      // Are you an admin for this tournament?
+      const { data: rows, error: taErr } = await supabase
+        .from("tournament_admins")
+        .select("role")
+        .eq("tournament_id", tid)
+        .eq("user_id", uid)
+        .limit(1);
+
+      if (taErr) {
+        console.warn("tournament_admins lookup error", taErr);
+        return;
+      }
+      const ta = (rows && rows[0]) ? rows[0] : null;
+      if (!ta?.role) return;
+
+      _adminRole = ta.role;
+      card.style.display = "block";
+      set($("adminStatus"), `Admin enabled ✅ (role: ${ta.role})`, "ok");
+
+      // Load verified flag
+      const { data: t, error: tErr } = await supabase
+        .from("tournaments")
+        .select("is_verified")
+        .eq("id", tid)
+        .single();
+
+      if (!tErr) $("adminVerifiedToggle").checked = !!t?.is_verified;
+
+      // Wire buttons (assign once each refresh using onclick)
+      $("btnAdminSaveVerified").onclick = async () => {
+        try {
+          set($("adminStatus"), "Saving verification…", "muted");
+          const verified = $("adminVerifiedToggle").checked;
+
+          const { error } = await supabase.rpc("set_tournament_verified", {
+            p_tournament_id: tid,
+            p_verified: verified
+          });
+          if (error) throw error;
+
+          set($("adminStatus"), "Saved ✅", "ok");
+          await Promise.allSettled([loadTournaments(), refreshBoard(), loadMySlots(), loadMyRequests(), loadAdminQueues()]);
+        } catch (e) {
+          set($("adminStatus"), e.message, "err");
+        }
+      };
+
+      $("btnAdminAddAdmin").onclick = async () => {
+        try {
+          const email = $("adminAddEmail").value.trim();
+          const role = $("adminAddRole").value;
+          if (!email) throw new Error("Enter an email.");
+
+          set($("adminAddStatus"), "Adding admin…", "muted");
+          const { data, error } = await supabase.rpc("add_tournament_admin", {
+            p_tournament_id: tid,
+            p_email: email,
+            p_role: role
+          });
+          if (error) throw error;
+
+          set($("adminAddStatus"), `Saved ✅ (${data?.user_email || email})`, "ok");
+        } catch (e) {
+          set($("adminAddStatus"), e.message, "err");
+        }
+      };
+
+      await loadAdminQueues();
+    }
+
+    async function loadAdminQueues() {
+      const tid = $("tournamentSelect").value;
+      if (!isAdmin() || !tid) return;
+
+      // Openings moderation list
+      set($("adminOpeningsStatus"), "Loading…", "muted");
+      $("adminOpeningsList").innerHTML = "";
+
+      const { data: openings, error: oErr } = await supabase
+        .from("team_openings")
+        .select("id, notes, status, moderation_state, created_at, teams!inner(team_name, tournament_id)")
+        .eq("teams.tournament_id", tid)
+        .order("created_at", { ascending: false });
+
+      if (oErr) {
+        set($("adminOpeningsStatus"), oErr.message, "err");
+      } else {
+        set($("adminOpeningsStatus"), `Showing ${openings?.length || 0}`, "ok");
+        (openings || []).forEach(o => {
+          const item = document.createElement("div");
+          item.className = "item";
+          item.innerHTML = `
+            <h4>${esc(o.teams?.team_name || "Team")} ${modPill(o.moderation_state)}</h4>
+            <div class="muted">${o.notes ? esc(o.notes) : ""}</div>
+            <div class="row" style="margin-top:10px;">
+              <button class="secondary" data-state="VISIBLE">Show</button>
+              <button class="secondary" data-state="HIDDEN">Hide</button>
+              <button data-state="REMOVED">Remove</button>
+            </div>
+          `;
+          item.querySelectorAll("button").forEach(btn => {
+            btn.addEventListener("click", async () => {
+              try {
+                const state = btn.getAttribute("data-state");
+                const { error } = await supabase.rpc("set_opening_moderation", {
+                  p_opening_id: o.id,
+                  p_state: state
+                });
+                if (error) throw error;
+                await Promise.allSettled([refreshBoard(), loadMySlots(), loadMyRequests(), loadAdminQueues()]);
+              } catch (e) {
+                set($("adminOpeningsStatus"), e.message, "err");
+              }
+            });
+          });
+          $("adminOpeningsList").appendChild(item);
+        });
+      }
+
+      // Availability moderation list
+      set($("adminAvailStatus"), "Loading…", "muted");
+      $("adminAvailList").innerHTML = "";
+
+      const { data: avs, error: aErr } = await supabase
+        .from("athlete_availability")
+        .select("id, created_at, tournament_id, division_id, is_active, moderation_state, athletes(display_name, grade, can_make_lbs)")
+        .eq("tournament_id", tid)
+        .order("created_at", { ascending: false });
+
+      if (aErr) {
+        set($("adminAvailStatus"), aErr.message, "err");
+      } else {
+        set($("adminAvailStatus"), `Showing ${avs?.length || 0}`, "ok");
+        (avs || []).forEach(av => {
+          const first = (av.athletes?.display_name || "").split(" ")[0] || "Athlete";
+          const grade = (av.athletes?.grade ?? "—");
+          const canMake = (av.athletes?.can_make_lbs != null) ? `≤ ${av.athletes.can_make_lbs} lbs` : "—";
+          const active = av.is_active ? `<span class="status-pill status-accepted">ACTIVE</span>` : `<span class="status-pill status-cancelled">CLOSED</span>`;
+          const item = document.createElement("div");
+          item.className = "item";
+          item.innerHTML = `
+            <h4>${esc(first)} ${active} ${modPill(av.moderation_state)}</h4>
+            <div style="font-size: 13px;"><b>Grade:</b> ${esc(String(grade))} &nbsp; • &nbsp; <b>Can make:</b> ${esc(String(canMake))}</div>
+            <div class="row" style="margin-top:10px;">
+              <button class="secondary" data-state="VISIBLE">Show</button>
+              <button class="secondary" data-state="HIDDEN">Hide</button>
+              <button data-state="REMOVED">Remove</button>
+            </div>
+          `;
+          item.querySelectorAll("button").forEach(btn => {
+            btn.addEventListener("click", async () => {
+              try {
+                const state = btn.getAttribute("data-state");
+                const { error } = await supabase.rpc("set_availability_moderation", {
+                  p_availability_id: av.id,
+                  p_state: state
+                });
+                if (error) throw error;
+                await Promise.allSettled([refreshBoard(), loadMySlots(), loadMyRequests(), loadAdminQueues()]);
+              } catch (e) {
+                set($("adminAvailStatus"), e.message, "err");
+              }
+            });
+          });
+          $("adminAvailList").appendChild(item);
+        });
+      }
+    }
+
+
+// ---------- Tournaments / Divisions ----------
     async function loadTournaments() {
       set($("tournamentsStatus"), "Loading tournaments…", "muted");
       const { data, error } = await supabase.from("tournaments").select("*").order("start_date", { ascending: true });
@@ -353,6 +600,7 @@
         .select("id, team_id, division_id, notes, status, created_at, teams!inner(team_name, tournament_id)")
         .eq("teams.tournament_id", tournamentId)
         .eq("status", "ACTIVE")
+          .eq("moderation_state", "VISIBLE")
         .order("created_at", { ascending: false });
 
       if (divisionIdOrNull) q = q.eq("division_id", divisionIdOrNull);
