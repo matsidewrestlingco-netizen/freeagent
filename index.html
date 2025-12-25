@@ -340,6 +340,7 @@
 
     // ---------- State ----------
     const divisionMap = new Map();
+      let mySlotsLoadSeq = 0;
 
     async function getSession() {
       // This is the call that previously “hung” the UI in some environments.
@@ -813,6 +814,7 @@
 
       const openingIds = openings.map(o => o.id);
       const { data: slots, error: sErr } = await supabase.from("opening_slots").select("*").in("opening_id", openingIds);
+      if (_seq !== mySlotsLoadSeq) return;
       if (sErr) return set($("openingsStatus"), sErr.message, "err");
 
       const slotsByOpening = new Map();
@@ -1088,7 +1090,10 @@ const item = document.createElement("div");
 
     // ---------- My Slots ----------
     async function loadMySlots() {
+      const _seq = ++mySlotsLoadSeq;
+
       $("mySlotSelect").innerHTML = "";
+      if (_seq !== mySlotsLoadSeq) return;
       set($("mySlotStatus"), "", "muted");
 
       const tid = $("tournamentSelect").value;
@@ -1111,6 +1116,7 @@ const item = document.createElement("div");
         .eq("created_by", uid)
         .eq("teams.tournament_id", tid)
         .order("created_at", { ascending: false });
+      if (_seq !== mySlotsLoadSeq) return;
 
       if (oErr) return set($("mySlotStatus"), oErr.message, "err");
 
