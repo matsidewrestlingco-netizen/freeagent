@@ -31,7 +31,10 @@
     .status-pending { background:#fff5db; color:#7a5a00; }
     .status-declined { background:#f0f0f0; color:#555; }
     .status-cancelled { background:#fdecef; color:#b00020; }
-  </style>
+  
+    .hidden { display:none !important; }
+    .pill.mode { font-weight:700; }
+</style>
 </head>
 <body>
   <h1>FreeAgent MVP</h1>
@@ -50,6 +53,40 @@
     </div>
     <div class="muted" style="margin-top:8px;" id="tournamentLandingHint">
       This page is filtered to a single tournament for easy sharing.
+    </div>
+  </div>
+
+  <div class="card" id="roleChooser" style="margin-top:14px;">
+    <h3>Choose your path</h3>
+    <div class="muted" style="margin-bottom:10px;">
+      The MVP is powerful, but it’s a lot. Pick a role and we’ll simplify the screen.
+    </div>
+
+    <div class="grid" style="grid-template-columns:repeat(3, minmax(0, 1fr)); gap:12px;">
+      <div class="card" style="padding:12px; margin:0;">
+        <div style="font-weight:700; font-size:16px;">Free Agent</div>
+        <div class="muted" style="margin-top:4px;">Post your athlete + availability. Manage incoming requests.</div>
+        <button id="btnModeFreeAgent" style="margin-top:10px;">I’m a Free Agent</button>
+      </div>
+
+      <div class="card" style="padding:12px; margin:0;">
+        <div style="font-weight:700; font-size:16px;">Team</div>
+        <div class="muted" style="margin-top:4px;">Post openings. Browse free agents. Send/cancel requests.</div>
+        <button id="btnModeTeam" style="margin-top:10px;">I’m a Team</button>
+      </div>
+
+      <div class="card" style="padding:12px; margin:0;">
+        <div style="font-weight:700; font-size:16px;">Tournament</div>
+        <div class="muted" style="margin-top:4px;">Verify + moderate. Add admins. Share a landing link.</div>
+        <button id="btnModeTournament" style="margin-top:10px;">I’m a Tournament</button>
+      </div>
+    </div>
+
+    <div class="row" style="margin-top:12px; gap:10px; align-items:center;">
+      <span class="muted">Current view:</span>
+      <span id="modePill" class="pill mode">Browse</span>
+      <button id="btnModeBrowse" class="secondary" style="max-width:180px;">Show everything</button>
+      <span class="muted" style="margin-left:auto;" id="modeHint"></span>
     </div>
   </div>
 
@@ -112,13 +149,13 @@
   </div>
 
   <div class="grid" style="margin-top:14px;">
-    <div class="card">
+    <div class="card" id="cardOpenings">
       <h3>Openings Board (Public)</h3>
       <div id="openingsStatus" class="muted"></div>
       <div id="openingsList" class="list"></div>
     </div>
 
-    <div class="card">
+    <div class="card" id="cardAgents">
       <h3>Free Agents (Public)</h3>
       <div class="muted">Shows: first name, grade, can-make weight. No contact info.</div>
       <div id="agentsStatus" class="muted"></div>
@@ -128,7 +165,7 @@
 
 
   
-  <div class="card" style="margin-top:14px;">
+  <div class="card" id="cardContact" style="margin-top:14px;">
     <h3>My Contact</h3>
     <div class="muted">Saved contact is only shared after a request is <b>ACCEPTED</b>.</div>
     <div id="contactStatus" class="muted" style="margin-top:8px;">Sign in to save your contact.</div>
@@ -154,7 +191,7 @@
     </div>
   </div>
 
-<div class="card" style="margin-top:14px;">
+<div class="card" id="cardRequests" style="margin-top:14px;">
     <h3>My Requests</h3>
     <div id="requestsStatus" class="muted">Sign in to view and manage your requests.</div>
 
@@ -236,7 +273,7 @@
   <hr style="margin:18px 0;border:none;border-top:1px solid #eee;" />
 
   <div class="grid">
-    <div class="card">
+    <div class="card" id="cardPostAvailability">
       <h3>Post Availability (Free Agent) — login required</h3>
 
       <label>Athlete first name (ex: “Evan”)</label>
@@ -263,7 +300,7 @@
       <div id="availStatus" class="muted" style="margin-top:10px;"></div>
     </div>
 
-    <div class="card">
+    <div class="card" id="cardPostOpening">
       <h3>Post Opening (Team) — login required</h3>
 
       <label>Team name</label>
@@ -326,6 +363,69 @@
       location.href = u.toString();
     }
 
+
+    // Role-based UI flow
+    const MODE_KEY = "mf_mode";
+    const MODES = {
+      browse: { pill: "Browse", hint: "Full interface (useful for power users)." },
+      freeagent: { pill: "Free Agent", hint: "Post availability + manage incoming requests." },
+      team: { pill: "Team", hint: "Post openings + manage outgoing requests." },
+      tournament: { pill: "Tournament", hint: "Admin + moderation tools." }
+    };
+
+    function setMode(mode) {
+      if (!MODES[mode]) mode = "browse";
+      localStorage.setItem(MODE_KEY, mode);
+
+      const pill = document.getElementById("modePill");
+      const hint = document.getElementById("modeHint");
+      if (pill) pill.textContent = MODES[mode].pill;
+      if (hint) hint.textContent = MODES[mode].hint;
+
+      const show = (id, on) => {
+        const el = document.getElementById(id);
+        if (!el) return;
+        el.classList.toggle("hidden", !on);
+      };
+
+      // Always-on browsing blocks
+      show("cardTournaments", true);
+      show("cardOpenings", true);
+      show("cardAgents", true);
+
+      // Useful debug during build
+      show("cardSession", true);
+
+      // Auth can be hidden for public landing links
+      show("authCard", !landingPublicOnly);
+
+      // Role-focused blocks
+      show("cardContact", mode !== "tournament");
+      show("cardRequests", mode !== "browse");
+      show("cardPostAvailability", mode === "freeagent");
+      show("cardPostOpening", mode === "team");
+      show("adminCard", mode === "tournament");
+
+      // Browse mode = show everything (admin still functionally gated by isAdmin())
+      if (mode === "browse") {
+        show("cardContact", true);
+        show("cardRequests", true);
+        show("cardPostAvailability", true);
+        show("cardPostOpening", true);
+        show("adminCard", true);
+      }
+    }
+
+    function wireModeButtons() {
+      const safe = (id, fn) => {
+        const el = document.getElementById(id);
+        if (el) el.addEventListener("click", fn);
+      };
+      safe("btnModeFreeAgent", () => setMode("freeagent"));
+      safe("btnModeTeam", () => setMode("team"));
+      safe("btnModeTournament", () => setMode("tournament"));
+      safe("btnModeBrowse", () => setMode("browse"));
+    }
   // Make failures visible (no more silent hangs)
   window.addEventListener("error", (e) => set($("authStatus"), "JS error: " + (e.message || e.type), "err"));
   window.addEventListener("unhandledrejection", (e) => set($("authStatus"), "Promise error: " + (e.reason?.message || e.reason), "err"));
@@ -371,6 +471,9 @@
   }
 
   function startApp() {
+    wireModeButtons();
+    setMode(localStorage.getItem(MODE_KEY) || 'browse');
+
     // ---------- Config ----------
     const SUPABASE_URL = "https://polfteqwekkhzlhfjhsn.supabase.co";
     const SUPABASE_ANON_KEY = `eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InBvbGZ0ZXF3ZWtraHpsaGZqaHNuIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjUxMTU2MzAsImV4cCI6MjA4MDY5MTYzMH0.npJCJJKOLTQddFH-xtU_ZtlT9_M8JWWpScDIsZAGY4M`.replace(/\s+/g, "");
