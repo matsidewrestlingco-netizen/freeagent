@@ -34,6 +34,35 @@
   
     .hidden { display:none !important; }
     .pill.mode { font-weight:700; }
+
+    /* Debug dock */
+    .debugDock{
+      position:fixed;
+      right:12px;
+      bottom:12px;
+      width:360px;
+      max-width:calc(100vw - 24px);
+      background:rgba(20,20,20,0.92);
+      border:1px solid rgba(255,255,255,0.12);
+      border-radius:14px;
+      box-shadow:0 18px 40px rgba(0,0,0,0.35);
+      padding:10px;
+      z-index:9999;
+      backdrop-filter: blur(8px);
+    }
+    .debugHeader{
+      display:flex;
+      justify-content:space-between;
+      align-items:center;
+      gap:10px;
+    }
+    .debugDock.collapsed #sessionDockBody{
+      display:none;
+    }
+    .debugDock.collapsed{
+      width:260px;
+      padding-bottom:8px;
+    }
 </style>
 </head>
 <body>
@@ -135,18 +164,20 @@
       <div id="tournamentsStatus" class="muted" style="margin-top:10px;"></div>
     </div>
 
-    <div class="card">
-      <h3>Session</h3>
-      <div class="muted">If logged in, RLS uses this user id.</div>
-      <pre id="sessionDump">{ "session": null }</pre>
-
-      <div style="margin-top:10px;">
-        <label>My slot to fill (required to request a free agent)</label>
-        <select id="mySlotSelect"></select>
-        <div id="mySlotStatus" class="muted" style="margin-top:6px;"></div>
+    <!-- Debug session dock (collapsible) -->
+    <div class="debugDock" id="sessionDock">
+      <div class="debugHeader">
+        <div style="display:flex; align-items:center; gap:8px;">
+          <span class="pill" style="font-weight:700;">Debug</span>
+          <span style="font-weight:700;">Session</span>
+        </div>
+        <button id="btnToggleSession" class="secondary" style="max-width:110px;">Hide</button>
+      </div>
+      <div id="sessionDockBody">
+        <div class="muted" style="margin-bottom:6px;">If logged in, RLS uses this user id.</div>
+        <pre id="sessionDump" style="margin:0; max-height:45vh; overflow:auto;">{ "session": null }</pre>
       </div>
     </div>
-  </div>
 
   <div class="grid" style="margin-top:14px;">
     <div class="card" id="cardOpenings">
@@ -426,6 +457,27 @@
       safe("btnModeTournament", () => setMode("tournament"));
       safe("btnModeBrowse", () => setMode("browse"));
     }
+
+    function wireSessionDock() {
+      const dock = document.getElementById("sessionDock");
+      const btn = document.getElementById("btnToggleSession");
+      if (!dock || !btn) return;
+
+      const KEY = "mf_session_collapsed";
+      const apply = (collapsed) => {
+        dock.classList.toggle("collapsed", collapsed);
+        btn.textContent = collapsed ? "Show" : "Hide";
+      };
+
+      apply(localStorage.getItem(KEY) === "1");
+
+      btn.addEventListener("click", () => {
+        const next = !dock.classList.contains("collapsed");
+        localStorage.setItem(KEY, next ? "1" : "0");
+        apply(next);
+      });
+    }
+
   // Make failures visible (no more silent hangs)
   window.addEventListener("error", (e) => set($("authStatus"), "JS error: " + (e.message || e.type), "err"));
   window.addEventListener("unhandledrejection", (e) => set($("authStatus"), "Promise error: " + (e.reason?.message || e.reason), "err"));
@@ -472,6 +524,7 @@
 
   function startApp() {
     wireModeButtons();
+    wireSessionDock();
     setMode(localStorage.getItem(MODE_KEY) || 'browse');
 
     // ---------- Config ----------
